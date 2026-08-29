@@ -41,7 +41,7 @@ def mad_detector(current: float, history: Iterable[float], threshold: float = 3.
     if invalid:
         return invalid
     values = _finite_values(history)
-    if values.size < 5:
+    if values.size < 3:
         return {"is_anomaly": False, "score": 0.0, "method": "mad", "reason": "insufficient_history"}
     median = float(np.median(values))
     mad = float(np.median(np.abs(values - median)))
@@ -52,7 +52,16 @@ def mad_detector(current: float, history: Iterable[float], threshold: float = 3.
         if iqr > 0:
             score, method, detail = abs(float(current) - median) / (iqr / 1.349), "mad:iqr_fallback", f"mad=0, iqr={iqr:.3f}"
         else:
-            score, method, detail = (float("inf") if float(current) != median else 0.0), "mad:constant_baseline", "mad=0, constant_baseline=true"
+            # Tied discrete histories can have MAD=IQR=0 without being truly
+            # constant (for example [100, 100, 100, 100, 101]). A small scale
+            # floor avoids flagging a value already inside the observed range,
+            # while still detecting a material move away from that range.
+            observed_min, observed_max = float(np.min(values)), float(np.max(values))
+            scale = max(abs(median) * 0.01, np.finfo(float).eps)
+            distance = max(observed_min - float(current), float(current) - observed_max, 0.0)
+            score = 0.6745 * distance / scale
+            method = "mad:tied_baseline_fallback"
+            detail = f"mad=0, iqr=0, observed_range=[{observed_min:.3f}, {observed_max:.3f}], scale={scale:.3f}"
     return {"is_anomaly": bool(score > threshold), "score": float(score), "method": method, "reason": f"median={median:.3f}, {detail}, threshold={threshold}"}
 
 
@@ -66,11 +75,11 @@ def detect_anomaly(current: float, history: Iterable[float], *, method: str = "a
         raise ValueError(f"Unsupported method: {method}")
     context = context or {}
     segment, full_history = _finite_values(context.get("same_segment_history", [])), _finite_values(history)
-    if segment.size >= 5:
+    if segment.size >= 3:
         result = mad_detector(current, segment, threshold=max(3.5, threshold))
         result["method"] = f"auto:same_segment_{result['method']}"
         result["reason"] += f"; segment_size={segment.size}"
-    elif full_history.size >= 5:
+    elif full_history.size >= 3:
         result = mad_detector(current, full_history, threshold=max(3.5, threshold))
         result["method"] = f"auto:{result['method']}"
     else:
