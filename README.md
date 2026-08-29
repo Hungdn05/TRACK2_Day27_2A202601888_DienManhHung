@@ -103,29 +103,29 @@ Reset về trạng thái khỏe:
 make reset
 ```
 
-## 5. Những phần cần hoàn thiện
+## 5. Reliability implementation
+
+The completed solution keeps the stable API in `student_api.py` and adds strict contracts, GX checkpoint evidence/quarantine, dbt SCD protection and unit tests, robust seasonal anomaly detection, distribution drift, transitive column lineage, multi-window burn policy, and RAG embedding-norm drift. See `reports/system_understanding.md` and `reports/solution_defense.md` for the operating model and trade-offs.
+
+## 6. Capabilities implemented
 
 Xem chi tiết trong `docs/LAB_GUIDE.md`.
 
-Các TODO quan trọng:
+Các capability chính:
 
-- `src/contract_validator.py`: type checking, freshness, severity/action.
-- `gx/validate_orders.py`: expectation đơn lẻ → Suite/ValidationDefinition/Checkpoint/Actions.
-- `dbt_project/`: thêm singular data test + dbt unit test cho join/SCD.
-- `observability/anomaly.py`: robust baseline, seasonality, MAD/EWMA.
-- `observability/distribution.py`: distribution drift tốt hơn mean ratio.
-- `observability/slo.py`: multi-window burn-rate policy.
-- `observability/lineage.py`: column lineage / OpenLineage optional.
-- `observability/rag_metrics.py`: embedding drift / retrieval metrics optional.
-- `reports/incident_report.md`: incident report cuối lab.
+- `src/contract_validator.py`: strict type checking, freshness, severity/action and remediation rows.
+- `gx/validate_orders.py`: Suite, Validation Definition, Checkpoint and local validation Action.
+- `dbt_project/`: singular data test, SCD guard and dbt unit test for revenue inflation.
+- `observability/`: robust seasonal MAD, KS/quantile distribution drift, multi-window burn, transitive column lineage and embedding-norm drift.
+- `reports/incident_report.md`: waiting for the instructor mystery dataset before recording real evidence.
 
-## 6. Hidden evaluation
+## 7. Hidden evaluation
 
 Bộ hidden evaluation gồm **20 test cases khó** không nằm trong ZIP học viên. Giảng viên chạy riêng để đánh giá robustness.
 
 Hidden test sẽ gọi stable interface trong `student_api.py`. Nếu refactor code, vẫn cần giữ interface mô tả trong `docs/STUDENT_API.md`.
 
-## 7. Dùng AI coding agent
+## 8. Dùng AI coding agent
 
 Có thể dùng Claude Code, Cursor, Codex, ChatGPT, Gemini CLI hoặc agent khác.
 
@@ -138,7 +138,7 @@ Mỗi thay đổi quan trọng cần có:
 
 Ghi ngắn gọn vào `reports/agent_log.md`.
 
-## 8. Tài liệu học tiếp
+## 9. Tài liệu học tiếp
 
 - Great Expectations Core: https://docs.greatexpectations.io/
 - dbt data tests: https://docs.getdbt.com/docs/build/data-tests

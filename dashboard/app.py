@@ -31,7 +31,27 @@ st.json({
     "row_count_anomaly": report["row_count_anomaly"],
     "kb_text_length_signal": report["kb_text_length_signal"],
     "contract_slo": report["contract_slo"],
+    "freshness_slos": report.get("freshness_slos", {}),
+    "kb_contract": report.get("kb_contract", {}),
+    "burn_windows": report.get("burn_windows", {}),
 })
+
+slo = report["contract_slo"]
+c5, c6, c7 = st.columns(3)
+c5.metric("SLO target", f"{slo['target']:.2%}")
+c6.metric("Error budget remaining", f"{slo['remaining_error_budget_fraction']:.1%}")
+c7.metric("Contract action", "BLOCK" if report["critical_contract_failures"] else "HEALTHY")
+
+st.subheader("Actions and incident context")
+st.json({
+    "order_actions": report.get("order_contract", {}).get("actions", {}),
+    "quarantine_rows": report.get("order_contract", {}).get("quarantine_rows", 0),
+    "burn_windows": report.get("burn_windows", {}),
+    "incident_status": "Awaiting mystery incident dataset / evidence",
+})
+
+st.subheader("Freshness SLOs")
+st.json(report.get("freshness_slos", {}))
 
 history = pd.read_csv(HISTORY)
 st.subheader("Historical row count")
@@ -39,5 +59,4 @@ st.line_chart(history.set_index("date")[["row_count"]])
 
 st.subheader("Example blast radius")
 st.write("stg_orders -> " + " -> ".join(report["sample_blast_radius_from_stg_orders"]))
-
-st.info("TODO: add SLO target, remaining error budget, burn-rate windows, owner/runbook links, and incident status.")
+st.write("raw_orders.amount -> " + " -> ".join(report.get("column_blast_radius_from_raw_orders_amount", [])))
