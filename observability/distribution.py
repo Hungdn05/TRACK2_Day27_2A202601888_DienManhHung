@@ -72,7 +72,12 @@ def detect_distribution_shift(current_values: Iterable[float], baseline_values: 
     probabilities = np.asarray([0.1, 0.5, 0.9])
     baseline_quantiles, current_quantiles = np.quantile(baseline, probabilities), np.quantile(current, probabilities)
     iqr = float(np.quantile(baseline, 0.75) - np.quantile(baseline, 0.25))
+    current_iqr = float(np.quantile(current, 0.75) - np.quantile(current, 0.25))
+    # A small sample can land a by-chance narrow IQR, which would shrink this
+    # denominator and inflate the effect. Floor it with the baseline std so the
+    # yardstick reflects the batch's real spread.
     scale = iqr if iqr > 0 else max(abs(float(np.median(baseline))), 1.0)
+    scale = max(scale, float(np.std(baseline)))
     quantile_effect = float(np.mean(np.abs(current_quantiles - baseline_quantiles) / scale))
 
     # Keep the starter's useful location-ratio signal. KS and a few quantiles
@@ -94,17 +99,39 @@ def detect_distribution_shift(current_values: Iterable[float], baseline_values: 
     spread_effect = abs(current_std - baseline_std) / max(baseline_std, scale_floor)
     mean_alert = bool(mean_ratio >= ratio_threshold and mean_effect >= 1.0)
     std_alert = bool(std_ratio >= ratio_threshold and spread_effect >= 1.0)
-    # Small deterministic fixtures need a larger practical effect; for normal
-    # batches, a 0.30 CDF gap or a statistically significant KS result is
-    # actionable. Quantile movement catches tail/variance drift with equal mean.
-    ks_threshold = 0.5 if min(current.size, baseline.size) < 4 else 0.30
-    quantile_threshold = 1.0
+    # A fixed CDF-gap threshold is not comparable across sample sizes: two
+    # samples drawn from the *same* distribution routinely exceed a 0.30 gap
+    # when n is small, so a constant threshold alerts on sampling noise. Use
+    # the Kolmogorov-Smirnov two-sample critical value at alpha=0.05, which
+    # scales with sqrt((n+m)/nm) and keeps the false-positive rate near 5%.
+    ks_threshold = 1.36 * float(np.sqrt((current.size + baseline.size) / (current.size * baseline.size)))
+    # When the baseline has real spread, quantile movement must clear a full
+    # baseline IQR twice over to count as drift rather than noise. A degenerate
+    # (zero-IQR) baseline has no such yardstick, so any movement stays material.
+    quantile_threshold = 1.0 if iqr <= 0 else 2.0
+    # Shape drift can hold both mean and CDF gap near baseline while the spread
+    # changes materially: a bimodal batch collapsing to one mode, or a widening
+    # batch. Compare robust IQRs, which the mean/std ratios above do not catch
+    # once their absolute-effect gates are applied.
+    iqr_ratio = _symmetric_ratio(current_iqr, iqr, zero_tolerance=max(scale_floor, 1e-12))
+    both_samples_sized = bool(current.size >= 4 and baseline.size >= 4)
+    collapse_alert = bool(both_samples_sized and iqr > 0 and current_iqr / iqr <= 0.15)
+    expansion_alert = bool(both_samples_sized and iqr > 0 and iqr_ratio >= 2.5 and std_ratio >= 2.5)
+
     mean_score = mean_ratio / ratio_threshold if np.isfinite(mean_ratio) else (mean_effect if mean_effect > 0 else 0.0)
     std_score = std_ratio / ratio_threshold if np.isfinite(std_ratio) else (spread_effect if spread_effect > 0 else 0.0)
     score = max(ks / ks_threshold, quantile_effect / quantile_threshold, mean_score, std_score)
     significant_ks = bool(min(current.size, baseline.size) >= 4 and ks_pvalue < 0.05)
     return {
-        "is_anomaly": bool(ks >= ks_threshold or significant_ks or quantile_effect >= quantile_threshold or mean_alert or std_alert),
+        "is_anomaly": bool(
+            ks >= ks_threshold
+            or significant_ks
+            or quantile_effect >= quantile_threshold
+            or mean_alert
+            or std_alert
+            or collapse_alert
+            or expansion_alert
+        ),
         "score": float(score),
         "method": "ks_quantile_ratio",
         "reason": (
@@ -112,6 +139,7 @@ def detect_distribution_shift(current_values: Iterable[float], baseline_values: 
             f"quantile_effect={quantile_effect:.3f}/{quantile_threshold:.3f}; "
             f"mean_ratio={mean_ratio:.3f}/{ratio_threshold:.3f}; mean_effect={mean_effect:.3f}; "
             f"std_ratio={std_ratio:.3f}/{ratio_threshold:.3f}; spread_effect={spread_effect:.3f}; "
-            f"baseline_iqr={iqr:.3f}; ignored_non_finite=true"
+            f"baseline_iqr={iqr:.3f}; current_iqr={current_iqr:.3f}; iqr_ratio={iqr_ratio:.3f}; "
+            f"collapse={collapse_alert}; expansion={expansion_alert}; ignored_non_finite=true"
         ),
     }

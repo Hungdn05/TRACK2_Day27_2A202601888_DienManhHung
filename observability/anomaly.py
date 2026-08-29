@@ -114,6 +114,50 @@ def _trend_residual_detector(
     }
 
 
+_EVENT_UPSIDE_TOLERANCE = 3.0
+
+
+def _apply_known_event(
+    result: dict[str, Any],
+    current: float,
+    history: np.ndarray,
+    event: Any,
+    *,
+    reference: float | None = None,
+) -> dict[str, Any]:
+    """Suppress the upside spike a known event is expected to cause.
+
+    A scheduled event (sale, migration, backfill) predicts *more* volume, so a
+    moderate rise is the forecast rather than a surprise. It never predicts a
+    drop, and it does not excuse an unbounded spike, so a decline or a move past
+    ``_EVENT_UPSIDE_TOLERANCE`` times baseline still pages.
+    """
+    result["reason"] += f"; known_event={event}"
+    if not result["is_anomaly"]:
+        return result
+
+    values = _finite_values(history)
+    try:
+        value = float(current)
+    except (TypeError, ValueError):
+        return result
+    if values.size == 0 or not np.isfinite(value):
+        return result
+
+    baseline = float(np.median(values)) if reference is None else float(reference)
+    if not np.isfinite(baseline) or baseline <= 0 or value <= baseline:
+        return result
+
+    ratio = value / baseline
+    if ratio > _EVENT_UPSIDE_TOLERANCE:
+        result["reason"] += f"; event_ratio={ratio:.3f} exceeds tolerance={_EVENT_UPSIDE_TOLERANCE}"
+        return result
+
+    result["is_anomaly"] = False
+    result["reason"] += f"; suppressed_expected_event_upside ratio={ratio:.3f}"
+    return result
+
+
 def detect_anomaly(current: float, history: Iterable[float], *, method: str = "auto", threshold: float = 3.0, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Detect metric anomalies; ``auto`` prefers a seasonal robust baseline."""
     if method == "zscore":
@@ -147,7 +191,15 @@ def detect_anomaly(current: float, history: Iterable[float], *, method: str = "a
                 if segment.size >= 3:
                     trend_result["reason"] += "; baseline=same_segment_history"
                 if context.get("known_event"):
-                    trend_result["reason"] += f"; known_event={context['known_event']}"
+                    # Under a trend the forecast is the next projected point, not
+                    # the history median, so measure the event's upside there.
+                    trend_result = _apply_known_event(
+                        trend_result,
+                        current,
+                        selected_history,
+                        context["known_event"],
+                        reference=float(selected_history[-1]) + expected_step,
+                    )
                 return trend_result
 
     if segment.size >= 3:
@@ -161,5 +213,5 @@ def detect_anomaly(current: float, history: Iterable[float], *, method: str = "a
         result = zscore_detector(current, full_history, threshold=threshold)
         result["method"] = "auto:zscore"
     if context.get("known_event"):
-        result["reason"] += f"; known_event={context['known_event']}"
+        result = _apply_known_event(result, current, selected_history, context["known_event"])
     return result
