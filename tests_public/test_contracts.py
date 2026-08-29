@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 from student_api import validate_orders
@@ -8,6 +9,7 @@ CONTRACT = ROOT / "contracts" / "orders_contract.yaml"
 
 
 def healthy_df():
+    now = datetime.now(timezone.utc)
     return pd.DataFrame([
         {
             "order_id": 1,
@@ -15,8 +17,8 @@ def healthy_df():
             "amount": 10.0,
             "currency": "USD",
             "status": "completed",
-            "created_at": "2026-08-28T10:00:00Z",
-            "updated_at": "2026-08-28T10:05:00Z",
+            "created_at": (now - timedelta(minutes=10)).isoformat(),
+            "updated_at": (now - timedelta(minutes=5)).isoformat(),
         },
         {
             "order_id": 2,
@@ -24,8 +26,8 @@ def healthy_df():
             "amount": 20.0,
             "currency": "USD",
             "status": "pending",
-            "created_at": "2026-08-28T10:01:00Z",
-            "updated_at": "2026-08-28T10:06:00Z",
+            "created_at": (now - timedelta(minutes=9)).isoformat(),
+            "updated_at": (now - timedelta(minutes=4)).isoformat(),
         },
     ])
 

@@ -4,6 +4,7 @@ freshness:
   column: published_at
   max_delay_minutes: 60
   severity: warning
+  action: warn
 fields:
   doc_id: {required: true, type: string}
   version: {required: true, type: integer}

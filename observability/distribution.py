@@ -5,30 +5,35 @@ from typing import Any, Iterable
 import numpy as np
 
 
-def detect_distribution_shift(
-    current_values: Iterable[float],
-    baseline_values: Iterable[float],
-    *,
-    ratio_threshold: float = 3.0,
-) -> dict[str, Any]:
-    """Very small starter detector using mean ratio.
+def _finite(values: Iterable[float]) -> np.ndarray:
+    try:
+        array = np.asarray(list(values), dtype=float)
+    except (TypeError, ValueError):
+        return np.asarray([], dtype=float)
+    return array[np.isfinite(array)]
 
-    This is intentionally not a full distribution test. Students are encouraged
-    to try KS test, PSI, quantile drift, robust ratios, or domain-specific checks.
+
+def _ks_statistic(current: np.ndarray, baseline: np.ndarray) -> float:
+    values = np.sort(np.unique(np.concatenate([current, baseline])))
+    current_cdf = np.searchsorted(np.sort(current), values, side="right") / current.size
+    baseline_cdf = np.searchsorted(np.sort(baseline), values, side="right") / baseline.size
+    return float(np.max(np.abs(current_cdf - baseline_cdf)))
+
+
+def detect_distribution_shift(current_values: Iterable[float], baseline_values: Iterable[float], *, ratio_threshold: float = 3.0) -> dict[str, Any]:
+    """Detect shape or location drift without a SciPy dependency.
+
+    ``ratio_threshold`` remains accepted for backwards compatibility.
     """
-    cur = np.asarray(list(current_values), dtype=float)
-    base = np.asarray(list(baseline_values), dtype=float)
-    if cur.size == 0 or base.size == 0:
-        return {"is_anomaly": False, "score": 0.0, "method": "mean_ratio", "reason": "empty_input"}
-    cur_mean = float(np.mean(cur))
-    base_mean = float(np.mean(base))
-    if base_mean == 0:
-        score = float("inf") if cur_mean != 0 else 1.0
-    else:
-        score = max(abs(cur_mean / base_mean), abs(base_mean / cur_mean)) if cur_mean != 0 else float("inf")
-    return {
-        "is_anomaly": bool(score >= ratio_threshold),
-        "score": float(score),
-        "method": "mean_ratio",
-        "reason": f"baseline_mean={base_mean:.3f}, current_mean={cur_mean:.3f}",
-    }
+    current, baseline = _finite(current_values), _finite(baseline_values)
+    if current.size < 4 or baseline.size < 4:
+        return {"is_anomaly": False, "score": 0.0, "method": "ks_quantile", "reason": f"insufficient_history current_n={current.size}; baseline_n={baseline.size}"}
+    ks = _ks_statistic(current, baseline)
+    probabilities = np.asarray([0.1, 0.5, 0.9])
+    baseline_quantiles, current_quantiles = np.quantile(baseline, probabilities), np.quantile(current, probabilities)
+    iqr = float(np.quantile(baseline, 0.75) - np.quantile(baseline, 0.25))
+    scale = iqr if iqr > 0 else max(abs(float(np.median(baseline))), 1.0)
+    quantile_effect = float(np.mean(np.abs(current_quantiles - baseline_quantiles) / scale))
+    ks_threshold, quantile_threshold = 0.35, 1.5
+    score = max(ks / ks_threshold, quantile_effect / quantile_threshold)
+    return {"is_anomaly": bool(ks >= ks_threshold or quantile_effect >= quantile_threshold), "score": float(score), "method": "ks_quantile", "reason": f"ks={ks:.3f}/{ks_threshold:.3f}; quantile_effect={quantile_effect:.3f}/{quantile_threshold:.3f}; baseline_iqr={iqr:.3f}; ignored_non_finite=true"}
