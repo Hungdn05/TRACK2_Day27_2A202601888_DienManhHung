@@ -73,15 +73,41 @@ def test_auto_detector_uses_short_segment_and_handles_tied_baseline():
     assert detect_anomaly(150, [100, 100, 100, 100, 101], method="mad")["is_anomaly"] is True
 
 
+def test_auto_detector_honors_known_numeric_trend():
+    history = [1000, 1020, 1040, 1060, 1080, 1100, 1120]
+    continuing = detect_anomaly(1140, history, context={"trend": 20})
+    flattening = detect_anomaly(1120, history, context={"trend": 20})
+    reversal = detect_anomaly(850, history, context={"trend": 20})
+    assert continuing["is_anomaly"] is False
+    assert continuing["method"] == "auto:trend"
+    assert flattening["is_anomaly"] is True
+    assert reversal["is_anomaly"] is True
+
+
 def test_constant_baseline_and_shape_shift_are_detected():
     assert detect_anomaly(150, [100, 100, 100, 100, 100], method="mad")["is_anomaly"] is True
     assert detect_distribution([0, 0, 20, 20], [9, 10, 10, 11])["is_anomaly"] is True
 
 
 def test_distribution_handles_small_samples_and_moderate_shape_drift():
+    assert detect_distribution([40], [10])["is_anomaly"] is True
+    assert detect_distribution([20], [10])["is_anomaly"] is False
+    assert detect_distribution([10], [10])["is_anomaly"] is False
     assert detect_distribution([20, 20, 20], [10, 10, 10])["is_anomaly"] is True
     assert detect_distribution([0, 5, 5, 5, 5, 10], [0, 0, 0, 10, 10, 10])["is_anomaly"] is True
     assert detect_distribution([9, 10, 10, 11], [9, 10, 10, 11])["is_anomaly"] is False
+
+
+def test_distribution_retains_mean_and_scale_ratio_signals():
+    sparse_tail = detect_distribution([1.0] * 99 + [1000.0], [1.0] * 100)
+    scale_shift = detect_distribution([-6, -3, 0, 3, 6] * 4, [-2, -1, 0, 1, 2] * 4)
+    assert sparse_tail["is_anomaly"] is True
+    assert scale_shift["is_anomaly"] is True
+
+
+def test_distribution_ignores_individual_non_numeric_values():
+    result = detect_distribution([20, "bad", 20, 20], [10, 10, "bad", 10])
+    assert result["is_anomaly"] is True
 
 
 def test_column_lineage_is_transitive_and_cycle_safe():
