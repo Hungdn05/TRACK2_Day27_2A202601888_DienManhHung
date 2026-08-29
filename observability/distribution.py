@@ -6,11 +6,27 @@ import numpy as np
 
 
 def _finite(values: Iterable[float]) -> np.ndarray:
+    cleaned: list[float] = []
     try:
-        array = np.asarray(list(values), dtype=float)
-    except (TypeError, ValueError):
+        iterator = iter(values)
+    except TypeError:
         return np.asarray([], dtype=float)
-    return array[np.isfinite(array)]
+    for value in iterator:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(numeric):
+            cleaned.append(numeric)
+    return np.asarray(cleaned, dtype=float)
+
+
+def _symmetric_ratio(left: float, right: float, *, zero_tolerance: float = 1e-12) -> float:
+    left_abs, right_abs = abs(float(left)), abs(float(right))
+    if left_abs <= zero_tolerance and right_abs <= zero_tolerance:
+        return 1.0
+    smaller, larger = min(left_abs, right_abs), max(left_abs, right_abs)
+    return float("inf") if smaller <= zero_tolerance else larger / smaller
 
 
 def _ks_statistic(current: np.ndarray, baseline: np.ndarray) -> float:
@@ -38,8 +54,19 @@ def detect_distribution_shift(current_values: Iterable[float], baseline_values: 
     ``ratio_threshold`` remains accepted for backwards compatibility.
     """
     current, baseline = _finite(current_values), _finite(baseline_values)
+    if current.size == 0 or baseline.size == 0:
+        return {"is_anomaly": False, "score": 0.0, "method": "ks_quantile_ratio", "reason": f"insufficient_history current_n={current.size}; baseline_n={baseline.size}"}
     if current.size < 2 or baseline.size < 2:
-        return {"is_anomaly": False, "score": 0.0, "method": "ks_quantile", "reason": f"insufficient_history current_n={current.size}; baseline_n={baseline.size}"}
+        mean_ratio = _symmetric_ratio(float(np.mean(current)), float(np.mean(baseline)))
+        return {
+            "is_anomaly": bool(mean_ratio >= ratio_threshold),
+            "score": float(mean_ratio),
+            "method": "mean_ratio_small_sample",
+            "reason": (
+                f"insufficient_for_shape_test current_n={current.size}; baseline_n={baseline.size}; "
+                f"mean_ratio={mean_ratio:.3f}/{ratio_threshold:.3f}"
+            ),
+        }
     ks = _ks_statistic(current, baseline)
     ks_pvalue = _ks_pvalue(ks, current.size, baseline.size)
     probabilities = np.asarray([0.1, 0.5, 0.9])
@@ -47,11 +74,44 @@ def detect_distribution_shift(current_values: Iterable[float], baseline_values: 
     iqr = float(np.quantile(baseline, 0.75) - np.quantile(baseline, 0.25))
     scale = iqr if iqr > 0 else max(abs(float(np.median(baseline))), 1.0)
     quantile_effect = float(np.mean(np.abs(current_quantiles - baseline_quantiles) / scale))
+
+    # Keep the starter's useful location-ratio signal. KS and a few quantiles
+    # can miss a sparse but operationally important tail that moves the mean.
+    current_mean, baseline_mean = float(np.mean(current)), float(np.mean(baseline))
+    mean_ratio = _symmetric_ratio(current_mean, baseline_mean)
+    baseline_std, current_std = float(np.std(baseline)), float(np.std(current))
+    scale_floor = max(abs(float(np.median(baseline))) * 1e-6, 1e-9)
+    if baseline_std <= scale_floor and current_std <= scale_floor:
+        std_ratio = 1.0
+    else:
+        std_ratio = _symmetric_ratio(current_std, baseline_std, zero_tolerance=scale_floor)
+
+    # Ratio checks also require a material absolute effect. This retains the
+    # zero-mean/large-tail protection without alerting on harmless round-off
+    # around a broad distribution whose mean happens to be nearly zero.
+    location_scale = max(baseline_std, abs(baseline_mean) * 0.05, scale_floor)
+    mean_effect = abs(current_mean - baseline_mean) / location_scale
+    spread_effect = abs(current_std - baseline_std) / max(baseline_std, scale_floor)
+    mean_alert = bool(mean_ratio >= ratio_threshold and mean_effect >= 1.0)
+    std_alert = bool(std_ratio >= ratio_threshold and spread_effect >= 1.0)
     # Small deterministic fixtures need a larger practical effect; for normal
     # batches, a 0.30 CDF gap or a statistically significant KS result is
     # actionable. Quantile movement catches tail/variance drift with equal mean.
     ks_threshold = 0.5 if min(current.size, baseline.size) < 4 else 0.30
     quantile_threshold = 1.0
-    score = max(ks / ks_threshold, quantile_effect / quantile_threshold)
+    mean_score = mean_ratio / ratio_threshold if np.isfinite(mean_ratio) else (mean_effect if mean_effect > 0 else 0.0)
+    std_score = std_ratio / ratio_threshold if np.isfinite(std_ratio) else (spread_effect if spread_effect > 0 else 0.0)
+    score = max(ks / ks_threshold, quantile_effect / quantile_threshold, mean_score, std_score)
     significant_ks = bool(min(current.size, baseline.size) >= 4 and ks_pvalue < 0.05)
-    return {"is_anomaly": bool(ks >= ks_threshold or significant_ks or quantile_effect >= quantile_threshold), "score": float(score), "method": "ks_quantile", "reason": f"ks={ks:.3f}/{ks_threshold:.3f}; ks_pvalue={ks_pvalue:.6f}; quantile_effect={quantile_effect:.3f}/{quantile_threshold:.3f}; baseline_iqr={iqr:.3f}; ignored_non_finite=true"}
+    return {
+        "is_anomaly": bool(ks >= ks_threshold or significant_ks or quantile_effect >= quantile_threshold or mean_alert or std_alert),
+        "score": float(score),
+        "method": "ks_quantile_ratio",
+        "reason": (
+            f"ks={ks:.3f}/{ks_threshold:.3f}; ks_pvalue={ks_pvalue:.6f}; "
+            f"quantile_effect={quantile_effect:.3f}/{quantile_threshold:.3f}; "
+            f"mean_ratio={mean_ratio:.3f}/{ratio_threshold:.3f}; mean_effect={mean_effect:.3f}; "
+            f"std_ratio={std_ratio:.3f}/{ratio_threshold:.3f}; spread_effect={spread_effect:.3f}; "
+            f"baseline_iqr={iqr:.3f}; ignored_non_finite=true"
+        ),
+    }
