@@ -65,9 +65,23 @@ def test_auto_detector_uses_same_weekday_baseline():
     assert result["method"].startswith("auto:same_segment")
 
 
+def test_auto_detector_uses_short_segment_and_handles_tied_baseline():
+    short_segment = detect_anomaly(250, [600, 610, 590, 605], context={"same_segment_history": [245, 250, 255]})
+    assert short_segment["is_anomaly"] is False
+    assert short_segment["method"].startswith("auto:same_segment")
+    assert detect_anomaly(101, [100, 100, 100, 100, 101], method="mad")["is_anomaly"] is False
+    assert detect_anomaly(150, [100, 100, 100, 100, 101], method="mad")["is_anomaly"] is True
+
+
 def test_constant_baseline_and_shape_shift_are_detected():
     assert detect_anomaly(150, [100, 100, 100, 100, 100], method="mad")["is_anomaly"] is True
     assert detect_distribution([0, 0, 20, 20], [9, 10, 10, 11])["is_anomaly"] is True
+
+
+def test_distribution_handles_small_samples_and_moderate_shape_drift():
+    assert detect_distribution([20, 20, 20], [10, 10, 10])["is_anomaly"] is True
+    assert detect_distribution([0, 5, 5, 5, 5, 10], [0, 0, 0, 10, 10, 10])["is_anomaly"] is True
+    assert detect_distribution([9, 10, 10, 11], [9, 10, 10, 11])["is_anomaly"] is False
 
 
 def test_column_lineage_is_transitive_and_cycle_safe():
